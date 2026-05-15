@@ -481,6 +481,12 @@ function isPro(){return !!getToken();}
 
 // Show setup screen if no API key
 window.addEventListener('DOMContentLoaded',()=>{
+  // Clean demo results out of history on every load
+  try{
+    const h=JSON.parse(localStorage.getItem('cg_hist')||'[]');
+    const cleaned=h.filter(x=>x.contractType!=='Freelance Service Agreement'||x.parties?.[0]!=='Acme Corp (Client)');
+    localStorage.setItem('cg_hist',JSON.stringify(cleaned));
+  }catch{}
   if(!getApiKey()) showSetup();
   renderHist();
   // Stripe success
@@ -998,7 +1004,7 @@ function runDemo(){
   contract='[demo contract]';
   chatHist=[{role:'user',content:'Analyze demo'},{role:'assistant',content:JSON.stringify(demo)}];
   renderAll(demo);
-  saveHist(demo);
+  // NOTE: intentionally NOT saving demo to history
   document.getElementById('expBtn').style.display='flex';
 }
 
