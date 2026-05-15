@@ -481,12 +481,14 @@ function isPro(){return !!getToken();}
 
 // Show setup screen if no API key
 window.addEventListener('DOMContentLoaded',()=>{
-  // Clean demo results out of history on every load
-  try{
-    const h=JSON.parse(localStorage.getItem('cg_hist')||'[]');
-    const cleaned=h.filter(x=>x.contractType!=='Freelance Service Agreement'||x.parties?.[0]!=='Acme Corp (Client)');
-    localStorage.setItem('cg_hist',JSON.stringify(cleaned));
-  }catch{}
+  // Version stamp — change this number to wipe all user localStorage on next visit
+  const APP_VERSION='v3';
+  if(localStorage.getItem('cg_version')!==APP_VERSION){
+    const keyBackup=localStorage.getItem('cg_apikey');
+    localStorage.clear();
+    if(keyBackup) localStorage.setItem('cg_apikey',keyBackup);
+    localStorage.setItem('cg_version',APP_VERSION);
+  }
   if(!getApiKey()) showSetup();
   renderHist();
   // Stripe success
