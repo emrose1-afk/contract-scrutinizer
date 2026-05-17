@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Contract Scrutinizer — AI Contract Scanner</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script>
+// Runs FIRST before any other code — wipes all stale data
+(function(){
+  var v='cs_v4';
+  if(localStorage.getItem('_appv')!==v){
+    var k=localStorage.getItem('cg_apikey');
+    localStorage.clear();
+    if(k) localStorage.setItem('cg_apikey',k);
+    localStorage.setItem('_appv',v);
+  }
+})();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <style>
