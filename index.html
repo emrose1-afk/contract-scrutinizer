@@ -6,7 +6,7 @@
 <title>Contract Scrutinizer — AI Contract Scanner</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
 <script>
-// Runs FIRST before any other code — wipes all stale data
+// Runs FIRST — wipe stale data on version change
 (function(){
   var v='cs_v4';
   if(localStorage.getItem('_appv')!==v){
@@ -484,16 +484,13 @@ let contract='', chatHist=[], curResult=null, imgPayload=null;
 let scanVersion=0; // increments every scan — prevents stale renders
 if(typeof pdfjsLib!=='undefined') pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-// API Key management — stored in browser localStorage
+// API Key management
 function getApiKey(){return localStorage.getItem('cg_apikey')||'';}
 function setApiKey(k){localStorage.setItem('cg_apikey',k.trim());}
-
 function getToken(){return localStorage.getItem('cg_token')||'';}
 function isPro(){return !!getToken();}
 
-// Show setup screen if no API key
 window.addEventListener('DOMContentLoaded',()=>{
-  // Version stamp — change this number to wipe all user localStorage on next visit
   const APP_VERSION='v3';
   if(localStorage.getItem('cg_version')!==APP_VERSION){
     const keyBackup=localStorage.getItem('cg_apikey');
@@ -503,7 +500,6 @@ window.addEventListener('DOMContentLoaded',()=>{
   }
   if(!getApiKey()) showSetup();
   renderHist();
-  // Stripe success
   const params=new URLSearchParams(window.location.search);
   const sid=params.get('session_id');
   if(sid){
@@ -539,7 +535,6 @@ async function testSetupKey(){
       else{err.style.color='var(--rd)';err.textContent='❌ '+msg;}
     }
     else if(r.ok||r.status===400){
-      // 400 can mean bad request but key is valid
       const d=await r.json();
       if(d?.error?.message?.includes('credit')){err.style.color='var(--rd)';err.textContent='❌ Credits empty on this account — add credits at console.anthropic.com/settings/billing';}
       else{setApiKey(k);err.style.color='var(--gn)';err.textContent='✅ Key works! Click Save & Start.';}
@@ -582,41 +577,79 @@ document.getElementById('ta').addEventListener('input',function(){
 
 async function handleFile(f){
   if(!f) return;
-  const ext=f.name.split('.').pop().toLowerCase();
-  const imgs=['jpg','jpeg','png','webp'];
-  const docs=['pdf','doc','docx','txt','rtf','odt'];
-  if(![...imgs,...docs].includes(ext)){alert('Unsupported format. Use PDF, DOCX, TXT, or image.');return;}
-  document.getElementById('fpname').textContent=f.name;
-  document.getElementById('fpill').style.display='inline-flex';
-  imgPayload=null;
-  const ta=document.getElementById('ta');
-  ta.value=''; ta.placeholder='Extracting...';
+  // Disable scan button during extraction
+  const scanBtn = document.getElementById('scanBtn');
+  scanBtn.disabled = true;
+  // Immediately clear any stale results and contract
+  resetResults();
+  contract = '';          // clear old contract
+  chatHist = [];
+  curResult = null;
+  DEMO_MODE = false;
+  document.getElementById('demoBadge').style.display = 'none';
+  document.getElementById('expBtn').style.display = 'none';
+
+  const ext = f.name.split('.').pop().toLowerCase();
+  const imgs = ['jpg','jpeg','png','webp'];
+  const docs = ['pdf','doc','docx','txt','rtf','odt'];
+  if(![...imgs,...docs].includes(ext)){
+    alert('Unsupported format. Use PDF, DOCX, TXT, or image.');
+    scanBtn.disabled = false;
+    return;
+  }
+  document.getElementById('fpname').textContent = f.name;
+  document.getElementById('fpill').style.display = 'inline-flex';
+  imgPayload = null;
+  const ta = document.getElementById('ta');
+  ta.value = '';
+  ta.placeholder = 'Extracting...';
   try{
     if(imgs.includes(ext)){
-      const b64=await toB64(f);
-      const mime=ext==='png'?'image/png':'image/jpeg';
-      imgPayload={type:'image',source:{type:'base64',media_type:mime,data:b64}};
-      ta.placeholder='Image loaded — ready to scan';
-      document.getElementById('cc').textContent='Image (Claude vision)';
-      const prev=document.getElementById('ipreview');if(prev)prev.remove();
-      const img=Object.assign(document.createElement('img'),{id:'ipreview',src:'data:'+mime+';base64,'+b64});
-      img.style.cssText='max-width:100%;max-height:160px;object-fit:contain;display:block;margin:.75rem 1.25rem;border-radius:6px;border:1px solid var(--bd2);';
+      const b64 = await toB64(f);
+      const mime = ext==='png'?'image/png':'image/jpeg';
+      imgPayload = {type:'image',source:{type:'base64',media_type:mime,data:b64}};
+      ta.placeholder = 'Image loaded — ready to scan';
+      document.getElementById('cc').textContent = 'Image (Claude vision)';
+      const prev = document.getElementById('ipreview');
+      if(prev) prev.remove();
+      const img = Object.assign(document.createElement('img'),{id:'ipreview',src:'data:'+mime+';base64,'+b64});
+      img.style.cssText = 'max-width:100%;max-height:160px;object-fit:contain;display:block;margin:.75rem 1.25rem;border-radius:6px;border:1px solid var(--bd2);';
       ta.parentNode.insertBefore(img,ta);
     } else {
-      const text=ext==='pdf'?await xPDF(f):ext==='docx'||ext==='doc'?await xDOCX(f):await xTXT(f);
-      ta.value=text; ta.placeholder='';
-      document.getElementById('cc').textContent=text.length.toLocaleString()+' chars';
+      let text = '';
+      if(ext==='pdf') text = await xPDF(f);
+      else if(ext==='docx'||ext==='doc') text = await xDOCX(f);
+      else text = await xTXT(f);
+      if(!text || text.trim().length===0) throw new Error('Extracted text is empty');
+      ta.value = text;
+      ta.placeholder = '';
+      document.getElementById('cc').textContent = text.length.toLocaleString()+' chars';
     }
-  }catch(e){ta.placeholder='Error: '+e.message; removeFile();}
+  } catch(e){
+    console.error(e);
+    ta.placeholder = '⚠️ Extraction failed: ' + e.message;
+    ta.value = '';               // clear any old text that might remain
+    document.getElementById('cc').textContent = '0 chars';
+    removeFile();                // hide file pill, reset input
+    alert('Could not read document:\n' + e.message);
+  } finally {
+    scanBtn.disabled = false;
+  }
 }
 function removeFile(){
   document.getElementById('fpill').style.display='none';
   document.getElementById('fi').value='';
-  document.getElementById('ta').value='';
-  document.getElementById('ta').placeholder='Paste your contract here...';
-  document.getElementById('cc').textContent='0 chars';
+  const ta = document.getElementById('ta');
+  ta.value = '';
+  ta.placeholder = 'Paste your contract here...';
+  document.getElementById('cc').textContent = '0 chars';
   document.getElementById('ipreview')?.remove();
-  imgPayload=null;
+  imgPayload = null;
+  contract = '';
+  chatHist = [];
+  curResult = null;
+  DEMO_MODE = false;
+  resetResults();
 }
 async function xPDF(f){const ab=await f.arrayBuffer();const pdf=await pdfjsLib.getDocument({data:ab}).promise;let t='';for(let i=1;i<=pdf.numPages;i++){const pg=await pdf.getPage(i);const c=await pg.getTextContent();t+=c.items.map(x=>x.str).join(' ')+'\n';}return t.trim();}
 async function xDOCX(f){const ab=await f.arrayBuffer();const r=await mammoth.extractRawText({arrayBuffer:ab});return r.value.trim();}
@@ -683,29 +716,16 @@ async function callClaude(body, timeoutMs=45000){
 
 // ─── Scan ─────────────────────────────────────────────────
 async function scanContract(){
-  // STEP 1: Increment version immediately
   const myVersion=++scanVersion;
-
-  // STEP 2: Wipe ALL panes to blank FIRST — no old data can show
-  ['overview','keyinfo','flags','redlines'].forEach(id=>{
-    document.getElementById('pane-'+id).innerHTML='';
-  });
-  document.getElementById('pane-chat').innerHTML='';
+  // Wipe all panes immediately
+  resetResults();
   document.getElementById('expBtn').style.display='none';
   document.getElementById('cbar').classList.remove('vis');
   document.getElementById('demoBadge').style.display='none';
 
-  // Switch to overview tab
-  document.querySelectorAll('.rpane').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.rt').forEach(b=>b.classList.remove('active'));
-  document.getElementById('pane-overview').classList.add('active');
-  document.querySelectorAll('.rt')[0].classList.add('active');
-
-  // STEP 3: Read inputs AFTER clearing
-  const text=document.getElementById('ta').value.trim();
-  const hasImg=!!imgPayload;
-
-  // STEP 4: Validate — show error in overview only, all other panes stay blank
+  // Read inputs
+  const text = document.getElementById('ta').value.trim();
+  const hasImg = !!imgPayload;
   if(!text && !hasImg){
     document.getElementById('pane-overview').innerHTML=`
       <div class="errbox">
@@ -715,17 +735,20 @@ async function scanContract(){
     return;
   }
 
-  // STEP 5: Reset state
-  contract=''; chatHist=[]; curResult=null; DEMO_MODE=false;
+  contract = text || (hasImg ? '[image]' : '');
+  chatHist = [];
+  curResult = null;
+  const lang = document.getElementById('langSel').value;
+  setScanLoading(true);
 
-  // STEP 6: Show loading with contract preview so user can verify correct text
-  const preview=text?text.substring(0,60).replace(/\s+/g,' ').trim():'Image file';
+  // Show loading with preview
+  const preview = text ? text.substring(0,60).replace(/\s+/g,' ').trim() : (hasImg ? 'Image file' : '');
   document.getElementById('pane-overview').innerHTML=`
     <div style="padding:.5rem 0">
       <div class="ld"><div class="sp"></div><span>Scanning contract...</span></div>
       <div style="background:var(--sf2);border-radius:8px;padding:.75rem 1rem;margin-top:.75rem;font-size:12px;color:var(--dm);line-height:1.6">
         <strong style="color:var(--mu);display:block;margin-bottom:3px">Reading:</strong>
-        "${preview}${text.length>60?'...':''}"
+        "${preview}${text && text.length>60?'...':''}"
       </div>
     </div>`;
   ['keyinfo','flags','redlines'].forEach(id=>{
@@ -733,47 +756,36 @@ async function scanContract(){
   });
   document.getElementById('pane-chat').innerHTML='<div class="empty"><div style="font-size:36px">💬</div><p>Ask follow-up questions after scanning.</p></div>';
 
-  contract=text||'[image]';
-  const lang=document.getElementById('langSel').value;
-  setScanLoading(true);
-
-  const sys=buildSys(lang);
-  const userContent=hasImg
-    ?[imgPayload,{type:'text',text:'Analyze this contract image. '+sys}]
-    :[{type:'text',text:'Analyze this contract:\n\n'+text}];
+  const sys = buildSys(lang);
+  const userContent = hasImg
+    ? [imgPayload, {type:'text', text:'Analyze this contract image. '+sys}]
+    : [{type:'text', text:'Analyze this contract:\n\n'+text}];
 
   try{
-    const d=await callClaude({
+    const d = await callClaude({
       model:'claude-sonnet-4-6',
       max_tokens:3500,
-      system:hasImg?undefined:sys,
-      messages:[{role:'user',content:userContent}]
+      system: hasImg ? undefined : sys,
+      messages:[{role:'user', content:userContent}]
     });
-
-    if(myVersion!==scanVersion) return; // newer scan started — discard this result
-
-    const raw=d.content?.[0]?.text||'';
+    if(myVersion !== scanVersion) return;
+    const raw = d.content?.[0]?.text||'';
     if(!raw) throw new Error('Empty response. Please try again.');
-    const match=raw.match(/\{[\s\S]*\}/);
+    const match = raw.match(/\{[\s\S]*\}/);
     if(!match) throw new Error('Could not parse AI response. Please try again.');
-    const result=JSON.parse(match[0]);
-
-    if(myVersion!==scanVersion) return; // double-check before rendering
-
-    curResult=result;
-    chatHist=[{role:'user',content:userContent},{role:'assistant',content:raw}];
+    const result = JSON.parse(match[0]);
+    if(myVersion !== scanVersion) return;
+    curResult = result;
+    chatHist = [{role:'user', content:userContent},{role:'assistant', content:raw}];
     renderAll(result);
     saveHist(result);
     document.getElementById('expBtn').style.display='flex';
-
-  }catch(e){
-    if(myVersion!==scanVersion) return;
-    const msg=e.name==='AbortError'
-      ?'Request timed out (45s). Check your internet and try again.'
-      :e.message;
-    // Show error in ALL panes so nothing stale is visible
+  } catch(e){
+    if(myVersion !== scanVersion) return;
+    const msg = e.name==='AbortError' ? 'Request timed out (45s). Check your internet and try again.' : e.message;
+    // Show error in overview only, others stay loading? Better to show error in all
     ['overview','keyinfo','flags','redlines'].forEach(id=>{
-      document.getElementById('pane-'+id).innerHTML='';
+      document.getElementById('pane-'+id).innerHTML = '';
     });
     document.getElementById('pane-overview').innerHTML=`
       <div class="errbox">
@@ -784,8 +796,8 @@ async function scanContract(){
           <button onclick="runDemo()" style="background:var(--sf2);border:1px solid var(--bd2);border-radius:7px;color:var(--mu);font-family:'DM Sans',sans-serif;font-size:12px;padding:5px 14px;cursor:pointer;">Run Demo</button>
         </div>
       </div>`;
-  }finally{
-    if(myVersion===scanVersion) setScanLoading(false);
+  } finally {
+    if(myVersion === scanVersion) setScanLoading(false);
   }
 }
 
@@ -800,42 +812,20 @@ function setScanLoading(on){
   btn.disabled=on;
   btn.innerHTML=on?'Scanning...':`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Scan for Red Flags`;
 }
-function allPanesLoading(){
-  ['overview','keyinfo','flags','redlines'].forEach(id=>{
-    document.getElementById('pane-'+id).innerHTML='<div class="ld"><div class="sp"></div><span>Analyzing...</span></div>';
-  });
-  document.getElementById('expBtn').style.display='none';
-}
-function showErr(msg){
-  ['overview','keyinfo','flags','redlines'].forEach(id=>{
-    document.getElementById('pane-'+id).innerHTML='';
-  });
-  document.getElementById('pane-overview').innerHTML=`
-    <div class="errbox">
-      <div class="errbox-title">⚠️ Scan failed</div>
-      <div class="errbox-msg">${esc(msg)}</div>
-      <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap;">
-        <button onclick="openPaywall()" style="background:var(--ac);color:#0d0f14;border:none;border-radius:7px;padding:5px 14px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;cursor:pointer;">Upgrade Plan</button>
-        <button onclick="runDemo()" style="background:var(--sf2);border:1px solid var(--bd2);border-radius:7px;color:var(--mu);font-family:'DM Sans',sans-serif;font-size:12px;padding:5px 14px;cursor:pointer;">Run Demo</button>
-      </div>
-    </div>`;
-}
 
 // ─── Render ───────────────────────────────────────────────
 function renderAll(r){
-  // Clear and render every pane fresh
   renderOverview(r);
   renderKeyInfo(r);
   renderFlags(r);
   renderRedlines(r);
-  // Reset chat pane safely
   const chatPane=document.getElementById('pane-chat');
   if(chatPane) chatPane.innerHTML='<div class="empty" id="cempty"><div style="font-size:36px">💬</div><p>Ask follow-up questions about this contract.</p></div>';
 }
 
 function renderOverview(r){
   const c=r.overallRisk>=70?'var(--rd)':r.overallRisk>=40?'var(--or)':'var(--gn)';
-  const snippet=contract&&contract!=='[image]'&&contract!=='from history'&&contract!=='[demo contract]'
+  const snippet=contract && contract!=='[image]' && contract!=='from history' && contract!=='[demo contract]'
     ?`<div style="font-size:11px;color:var(--dm);border-top:1px solid var(--bd);margin-top:.75rem;padding-top:.65rem;line-height:1.6">📄 Scanned: "${contract.substring(0,80).trim()}${contract.length>80?'...':''}"</div>`
     :'';
   document.getElementById('pane-overview').innerHTML=`<div class="scard">
@@ -947,15 +937,9 @@ function exportPDF(){document.querySelectorAll('.fc').forEach(c=>c.classList.add
 // ─── Clear ────────────────────────────────────────────────
 function clearScan(){
   removeFile();
-  document.getElementById('ta').value='';
-  document.getElementById('cc').textContent='0 chars';
+  // Already resets everything inside removeFile + resetResults, but ensure:
   document.getElementById('expBtn').style.display='none';
   document.getElementById('cbar').classList.remove('vis');
-  document.getElementById('pane-overview').innerHTML='<div class="empty"><div style="font-size:38px">⚖️</div><p>Paste a contract and click<br/><strong>Scan for Red Flags</strong><br/><br/>or click <strong>Demo</strong> to preview features</p></div>';
-  document.getElementById('pane-keyinfo').innerHTML='<div class="empty"><div style="font-size:38px">📋</div><p>Key dates &amp; obligations appear here.</p></div>';
-  document.getElementById('pane-flags').innerHTML='<div class="empty"><div style="font-size:38px">🚩</div><p>Risk flags appear here.</p></div>';
-  document.getElementById('pane-redlines').innerHTML='<div class="empty"><div style="font-size:38px">✏️</div><p>Clause rewrites appear here.</p></div>';
-  document.getElementById('pane-chat').innerHTML='<div class="empty" id="cempty"><div style="font-size:38px">💬</div><p>Ask follow-up questions after scanning.</p></div>';
   contract=''; chatHist=[]; curResult=null; DEMO_MODE=false;
   document.getElementById('demoBadge').style.display='none';
 }
@@ -969,17 +953,14 @@ function loadHist(id){
   const item=getHist().find(x=>x.id===id);if(!item)return;
   curResult=item.result; contract='from history';
   chatHist=[];
-  // Clear chat pane
   document.getElementById('pane-chat').innerHTML='<div class="empty" id="cempty"><div style="font-size:36px">💬</div><p>Ask follow-up questions after scanning.</p></div>';
   document.getElementById('cbar').classList.remove('vis');
-  // Switch to overview tab
   document.querySelectorAll('.rpane').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.rt').forEach(b=>b.classList.remove('active'));
   document.getElementById('pane-overview').classList.add('active');
   document.querySelectorAll('.rt')[0].classList.add('active');
   renderAll(item.result);
   document.getElementById('expBtn').style.display='flex';
-  // Switch to scan tab
   document.querySelectorAll('.tab-page').forEach(p=>p.classList.remove('active'));
   document.getElementById('tab-scan').classList.add('active');
   document.querySelectorAll('.nt').forEach((b,i)=>b.classList.toggle('active',i===0));
@@ -1018,20 +999,15 @@ function runDemo(){
   contract='[demo contract]';
   chatHist=[{role:'user',content:'Analyze demo'},{role:'assistant',content:JSON.stringify(demo)}];
   renderAll(demo);
-  // NOTE: intentionally NOT saving demo to history
   document.getElementById('expBtn').style.display='flex';
 }
 
 // ─── Paywall ──────────────────────────────────────────────
 let selPlanId='monthly';
-
-// OWNER: paste your Stripe Payment Link URLs here after creating them
-// dashboard.stripe.com → Payment Links → Create link
 const STRIPE_LINKS = {
   monthly: localStorage.getItem('cg_stripe_monthly') || '',
   yearly:  localStorage.getItem('cg_stripe_yearly')  || '',
 };
-
 function openPaywall(){document.getElementById('paywall').style.display='flex';}
 function closePaywall(){document.getElementById('paywall').style.display='none';}
 function selPlan(p){
@@ -1042,9 +1018,7 @@ function selPlan(p){
 async function startCheckout(){
   const link = STRIPE_LINKS[selPlanId];
   if(!link){
-    // Show instructions to owner to add payment links
-    document.getElementById('pwErr').textContent =
-      'Payment link not configured yet. Owner: go to dashboard.stripe.com → Payment Links → create a link → click "Configure Payment Links" below.';
+    document.getElementById('pwErr').textContent = 'Payment link not configured yet. Owner: go to dashboard.stripe.com → Payment Links → create a link → click "Configure Payment Links" below.';
     document.getElementById('configLinkRow').style.display='block';
     return;
   }
